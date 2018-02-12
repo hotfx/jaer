@@ -1049,18 +1049,29 @@ abstract public class AbstractMotionFlowIMU extends EventFilter2D implements Obs
         // 1.) Filter out events with speed high above average.
         // 2.) Filter out events whose velocity deviates from IMU estimate by a 
         // certain degree.
-        return speedControlEnabled && isSpeeder() || discardOutliersForStatisticalMeasurementEnabled
+        return speedControlEnabled && isSpeeder() && isAngle()|| discardOutliersForStatisticalMeasurementEnabled
                 && Math.abs(motionFlowStatistics.angularError.calculateError(vx, vy, v, vxGT, vyGT, vGT))
                 > discardOutliersForStatisticalMeasurementMaxAngleDifferenceDeg;
     }
-
+    
     // <editor-fold defaultstate="collapsed" desc="Speed Control">
     protected boolean isSpeeder() {
         // Discard events if velocity is too far above average
         avgSpeed = (1 - speedMixingFactor) * avgSpeed + speedMixingFactor * v;
-        return v > avgSpeed * excessSpeedRejectFactor;
+        //return v > avgSpeed * excessSpeedRejectFactor;
+        return true;
     }
     // </editor-fold>
+    
+    protected boolean isAngle() {
+        
+        boolean angleWrong;
+        if(vx==0) return true;
+        if(vx!=0){
+        angleWrong = (Math.PI/5 < Math.atan(vy/vx)) || (-Math.PI/5 > Math.atan(vy/vx)) || (vx < 0) ;
+        return angleWrong;}
+        return false;
+    }
 
     // <editor-fold defaultstate="collapsed" desc="IMUCalibration Start and Reset buttons">
     synchronized public void doStartIMUCalibration() {

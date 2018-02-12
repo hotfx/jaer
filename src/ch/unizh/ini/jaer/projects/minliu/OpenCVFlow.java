@@ -337,28 +337,22 @@ public class OpenCVFlow extends AbstractMotionFlow
                 System.err.println(e);
                 return;
             } finally {
-                try {
-                    // showResult(newFrame);
-
-                    float[] new_slice_buff = new float[(int) (newFrame.total()
-                            * newFrame.channels())];
-
-                    for (int i = 0; i < chip.getSizeY(); i++) {
-                        for (int j = 0; j < chip.getSizeX(); j++) {
-                            new_slice_buff[chip.getSizeX() * i + j] = new1DArray[chip.getSizeX() * i + j] / newGrayScale;
-                        }
+                // showResult(newFrame);
+                
+                float[] new_slice_buff = new float[(int) (newFrame.total()
+                        * newFrame.channels())];
+                for (int i = 0; i < chip.getSizeY(); i++) {
+                    for (int j = 0; j < chip.getSizeX(); j++) {
+                        new_slice_buff[chip.getSizeX() * i + j] = new1DArray[chip.getSizeX() * i + j] / newGrayScale;
                     }
-
-                    OFResultDisplay.setPixmapFromGrayArray(new_slice_buff);
-                    DateFormat df = new SimpleDateFormat("yyyyMMddHHmmss");
-                    File folder = new File("EventSlices/" + chip.getAeInputStream().getFile().getName() + this.patchFlow.getSliceMethod().toString());
-                    folder.mkdir();
-                    File outputfile = new File(folder, String.format("Clear-%s.jpg", df.format(new Date())));
-                    Core.flip(newFrame, newFrame, 0);
-                    ImageIO.write(Mat2BufferedImage(newFrame), "jpg", outputfile);
-                } catch (IOException ex) {
-                    Logger.getLogger(OpenCVFlow.class.getName()).log(Level.SEVERE, null, ex);
                 }
+                OFResultDisplay.setPixmapFromGrayArray(new_slice_buff);
+                DateFormat df = new SimpleDateFormat("yyyyMMddHHmmss");
+                File folder = new File("EventSlices/" + chip.getAeInputStream().getFile().getName() + this.patchFlow.getSliceMethod().toString());
+                folder.mkdir();
+                File outputfile = new File(folder, String.format("Clear-%s.jpg", df.format(new Date())));
+                Core.flip(newFrame, newFrame, 0);
+//                    ImageIO.write(Mat2BufferedImage(newFrame), "jpg", outputfile);
             }
 
             // draw the tracks
