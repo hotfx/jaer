@@ -23,7 +23,7 @@ import static net.sf.jaer.eventprocessing.EventFilter.log;
  * S.-H. Ieng, C. Clercq, C. Bartolozzi, M. Srinivasan, "Asynchronous frameless
  * event-based optical flow", Neural Networks, 2012. For each event, it uses a
  * histogram of previous events in its neighborhood to estimate a spatial and
- * temporal gradient. This serves as input data to an overdetermined system of
+ * temporal gradient. This serves as input data to  an overdetermined system of
  * linear equations that can be solved with Least Squares Estimation for the
  * optical flow vector.
  *
@@ -89,7 +89,7 @@ public class LucasKanadeFlow extends AbstractMotionFlow {
         setPropertyTooltip("Lucas Kanade", "thr", "threshold to discard events with too small intensity gradient"); // TODO describe typical value of thr and what exactly it tests
         setPropertyTooltip("Lucas Kanade", "secondTempDerivative", "Use second temporal derivative"); // TODO what does this parameter do exactly, and is it described in paper? If not remove it.
         setPropertyTooltip("Lucas Kanade", "drawCollectedEventsHistogramEnabled", "Draws the collected 2D event histogram on output of sensor to allow visualizing the data");
-        setPropertyTooltip("Lucas Kanade", "derivativeEstimator", "<html>Method of computing spatial derivative of collected 2D event histogram<ul><li>"
+        setPropertyTooltip("Lucas  ", "derivativeEstimator", "<html>Method of computing spatial derivative of collected 2D event histogram<ul><li>"
                 + "BackwardFiniteDifference: Original method, has bias to left and downwards"
                 + "<li>CentralFiniteDifferenceFirstOrder: First order centered derivative estimate"
                 + "<li>CentralFiniteDifferenceSecondOrder: 2nd order centered derivative estimate"
@@ -140,7 +140,7 @@ public class LucasKanadeFlow extends AbstractMotionFlow {
     }
 
     @Override
-    final synchronized void allocateMap() {
+    public final synchronized void allocateMap() {
         timestamps = new ArrayDeque[subSizeX][subSizeY][2];
         timestamps2 = new ArrayDeque[subSizeX][subSizeY][2];
         for (i = 0; i < timestamps.length; i++) {

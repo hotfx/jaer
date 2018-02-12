@@ -62,7 +62,7 @@ abstract public class AbstractMotionFlowIMU extends EventFilter2D implements Obs
     // Observed motion flow.
     public static float vx, vy, v;
 
-    int numInputTypes;
+    public int numInputTypes;
 
     /**
      * Basic event information. Type is event polarity value, 0=OFF and 1=ON,
@@ -619,7 +619,7 @@ abstract public class AbstractMotionFlowIMU extends EventFilter2D implements Obs
     @Override
     public abstract EventPacket filterPacket(EventPacket in);
 
-    synchronized void allocateMap() {
+ public synchronized void allocateMap() {
 
         if (subSizeY * subSizeX * numInputTypes == 0) {
             return;
