@@ -139,22 +139,5 @@ public class ReichardtFlow extends AbstractMotionFlow {
         }
 
     }
-    
-    @Override
-    synchronized public void setSearchDistance(int searchDistance) {
-        if (searchDistance > 10) {
-            searchDistance = 10;
-        } else if (searchDistance < 1) {
-            searchDistance = 1; // limit size
-        }
-        while ((2 * searchDistance + 1) * (2 * searchDistance + 1) < (fitOrder + 1) * (fitOrder + 2) / 2) {
-            searchDistance++;
-        }
-        this.searchDistance = searchDistance;
-        putInt("searchDistance", searchDistance);
-        support.firePropertyChange("searchDistance", this.searchDistance, searchDistance);
-        resetFilter();
-        computeSavitzkyGolayCoefficients();
-    }
 
 }

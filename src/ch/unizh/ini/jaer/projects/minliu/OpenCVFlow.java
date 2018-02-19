@@ -145,7 +145,7 @@ public class OpenCVFlow extends AbstractMotionFlow
             patchFlow.setFilterEnabled(true);
             chain.add(patchFlow);
         } catch (Exception e) {
-            log.warning("could not setup PatchMatchFlow fiter.");
+            log.warning("could not setup PatchMatchFlow filter.");
         }
         setEnclosedFilterChain(chain);
 
@@ -195,8 +195,10 @@ public class OpenCVFlow extends AbstractMotionFlow
         if (patchFlow != null) {
             patchFlow.resetFilter();
         }
-
-        OFResultDisplay.setImageSize(chip.getSizeX(), chip.getSizeY());
+        
+        if (OFResultDisplay != null){
+            OFResultDisplay.setImageSize(chip.getSizeX(), chip.getSizeY());
+        }
     }
 
     @Override

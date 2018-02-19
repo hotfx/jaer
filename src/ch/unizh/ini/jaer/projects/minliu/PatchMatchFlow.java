@@ -29,10 +29,18 @@ import com.jogamp.opengl.util.awt.TextRenderer;
 
 import ch.unizh.ini.jaer.projects.rbodo.opticalflow.AbstractMotionFlow;
 import com.jogamp.opengl.GLException;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.StringTokenizer;
 import java.util.Timer;
 import java.util.TimerTask;
+import javax.swing.JFileChooser;
 import net.sf.jaer.Description;
 import net.sf.jaer.DevelopmentStatus;
 import net.sf.jaer.chip.AEChip;
@@ -41,6 +49,7 @@ import net.sf.jaer.event.ApsDvsEventPacket;
 import net.sf.jaer.event.EventPacket;
 import net.sf.jaer.event.PolarityEvent;
 import net.sf.jaer.eventio.AEInputStream;
+import static net.sf.jaer.eventprocessing.EventFilter.log;
 import net.sf.jaer.eventprocessing.TimeLimiter;
 import net.sf.jaer.graphics.AEViewer;
 import net.sf.jaer.graphics.FrameAnnotater;
@@ -155,13 +164,21 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
     private boolean displayResultHistogram = getBoolean("displayResultHistogram", true);
 
     public enum SliceMethod {
-        ConstantDuration, ConstantEventNumber, AreaEventNumber, ConstantIntegratedFlow
+        ConstantDuration, ConstantEventNumber, AreaEventNumber, ConstantIntegratedFlow, SpeedInput
     };
     private SliceMethod sliceMethod = SliceMethod.valueOf(getString("sliceMethod", SliceMethod.AreaEventNumber.toString()));
     // counting events into subsampled areas, when count exceeds the threshold in any area, the slices are rotated
     private int areaEventNumberSubsampling = getInt("areaEventNumberSubsampling", 5);
     private int[][] areaCounts = null;
     private boolean areaCountExceeded = false;
+    //Parameters for SpeedInput SliceMethod
+    private int speedFactor = getInt("speedFactor", 1);
+    private int MIN_SPEED_FACTOR = 0;
+    private int MAX_SPEED_FACTOR = Integer.MAX_VALUE;
+    public InputStream speedIn;
+    private BufferedReader speedReader;
+    private int inputSpeed;
+    private int nextInputSpeed, inputSpeedTs, nextInputSpeedTs;
 
     // nongreedy flow evaluation
     // the entire scene is subdivided into regions, and a bitmap of these regions distributed flow computation more fairly
@@ -232,7 +249,8 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                 + "<li>ConstantDuration: slices are fixed time duration"
                 + "<li>ConstantEventNumber: slices are fixed event number"
                 + "<li>AreaEventNumber: slices are fixed event number in any subsampled area defined by areaEventNumberSubsampling"
-                + "<li>ConstantIntegratedFlow: slices are rotated when average speeds times delta time exceeds half the search distance");
+                + "<li>ConstantIntegratedFlow: slices are rotated when average speeds times delta time exceeds half the search distance"
+                + "<li>SpeedInput: slice duration depends on speed input from file");
         setPropertyTooltip(patchTT, "areaEventNumberSubsampling", "<html>how to subsample total area to count events per unit subsampling blocks for AreaEventNumber method. <p>For example, if areaEventNumberSubsampling=5, <br> then events falling into 32x32 blocks of pixels are counted <br>to determine when they exceed sliceEventCount to make new slice");
         setPropertyTooltip(patchTT, "skipProcessingEventsCount", "skip this many events for processing (but not for accumulating to bitmaps)");
         setPropertyTooltip(patchTT, "adaptiveEventSkipping", "enables adaptive event skipping depending on free time left in AEViewer animation loop");
@@ -564,6 +582,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                         setSliceDurationUs(sliceDurationUs + durChange);
                         break;
                     case ConstantEventNumber:
+                        break;
                     case AreaEventNumber:
                         if (errSign > 0 && sliceDeltaTimeUs(2) < getSliceDurationUs()) { // don't increase slice past the sliceDurationUs limit
                             // match too short, increase count
@@ -574,6 +593,8 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                         break;
                     case ConstantIntegratedFlow:
                         setSliceEventCount(eventCounter);
+                        break;
+                    case SpeedInput:
                 }
                 if (adaptiveSliceDurationLogger != null && adaptiveSliceDurationLogger.isEnabled()) {
                     if (!isDisplayGlobalMotion()) {
@@ -845,6 +866,10 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                     break;
                 }
                 if (totalMovement < searchDistance / 2 && dt < sliceDurationUs) {
+                    return false;
+                }
+            case SpeedInput:
+                if(dt < getSpeed() * speedFactor){
                     return false;
                 }
                 break;
@@ -1753,6 +1778,25 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         putString("sliceMethod", sliceMethod.toString());
         if (sliceMethod == SliceMethod.AreaEventNumber || sliceMethod == SliceMethod.ConstantIntegratedFlow) {
             showAreasForAreaCountsTemporarily();
+        } else if (sliceMethod == SliceMethod.SpeedInput) {
+            if (speedReader != null) {
+                log.info("SpeedInputFile already chosen");
+                return;
+            }
+            String filename = null, filepath = null;
+            final JFileChooser fc = new JFileChooser();
+            fc.setCurrentDirectory(new File(getString("lastFile", System.getProperty("user.dir"))));  // defaults to startup runtime folder
+            fc.setFileSelectionMode(JFileChooser.FILES_ONLY);
+            fc.setSelectedFile(new File(getString("lastFile", System.getProperty("user.dir"))));
+            fc.setDialogTitle("Select folder and file to read recorded speed from");
+            int ret = fc.showOpenDialog(chip.getAeViewer() != null && chip.getAeViewer().getFilterFrame() != null ? chip.getAeViewer().getFilterFrame() : null);
+            if (ret == JFileChooser.APPROVE_OPTION) {
+                File file = fc.getSelectedFile();
+                putString("lastFile", file.toString());
+                setSpeedInputFile(file);
+            } else {
+                log.info("Cancelled logging motion vectors");
+            }
         }
 //        if(sliceMethod==SliceMethod.ConstantIntegratedFlow){
 //            setDisplayGlobalMotion(true);
@@ -2059,7 +2103,6 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
     }
 
     /**
-     * @param showSliceBitMap
      * @param showSliceBitMap the option of displaying bitmap
      */
     synchronized public void setShowSliceBitMap(boolean showSliceBitMap) {
@@ -2269,7 +2312,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                             + engFmt.format(result.sadValue);
                 }
             }
-        } catch (ArrayIndexOutOfBoundsException e) {
+        } catch (ArrayIndexOutOfBoundsException a) {
 
         }
 
@@ -2430,7 +2473,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                     try {
                         int scale = Integer.parseInt(st.nextToken());
                         scalesToComputeArray[i++] = scale;
-                    } catch (NumberFormatException e) {
+                    } catch (NumberFormatException nfE) {
                         log.warning("bad string in scalesToCompute field, use blank or 0,2 for example");
                         setDefaultScalesToCompute();
                     }
@@ -2599,5 +2642,53 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         this.nonGreedyFractionToBeServiced = nonGreedyFractionToBeServiced;
         putFloat("nonGreedyFractionToBeServiced", nonGreedyFractionToBeServiced);
     }
+    
+    /**
+     * @return the SpeedFactor 
+    */
+    public int getSpeedFactor(){
+        return speedFactor;
+    }
+    
+    public void setSpeedfactor(int speedFactor){
+        int old = this.speedFactor;
+        if (speedFactor < MIN_SPEED_FACTOR) {
+            speedFactor = MIN_SPEED_FACTOR;
+        } else if (speedFactor > MAX_SPEED_FACTOR) {
+            speedFactor = MAX_SPEED_FACTOR; // limit it to one second
+        }
+        this.speedFactor = speedFactor;
+
+        putInt("SpeedFactor", speedFactor);
+        getSupport().firePropertyChange("sliceDurationUs", old, this.speedFactor);
+    }
+    
+    public void setSpeedInputFile(File speedInputFile){
+        try (InputStream in = Files.newInputStream(speedInputFile.toPath()); BufferedReader reader  = new BufferedReader(new InputStreamReader(speedIn))){
+            speedReader = reader;
+            
+        } catch (IOException io) {
+            System.err.println("setSpeedInputFile:" + io);
+        }
+    }
+    
+    public int getSpeed(){
+        if(ts > nextInputSpeedTs){
+            inputSpeedTs = nextInputSpeedTs;
+            inputSpeed = nextInputSpeed;
+            try{
+                String[] nextSpeedLine = null;
+                nextSpeedLine = speedReader.readLine().split(" ");
+                nextInputSpeedTs = Integer.parseInt(nextSpeedLine[0]);
+                nextInputSpeed = Integer.parseInt(nextSpeedLine[1]);
+            } catch (NullPointerException np){
+                System.err.println("End of Speedfile");
+            } catch (IOException io){
+                System.err.println("No SpeedInputFile");
+            }
+        }
+        return inputSpeed;
+    }
+            
 
 }
