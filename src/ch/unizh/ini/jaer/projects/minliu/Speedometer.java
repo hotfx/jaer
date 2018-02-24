@@ -13,13 +13,24 @@ import java.awt.Font;
 import java.awt.Point;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Rectangle2D;
+import java.io.File;
+import javax.swing.JFileChooser;
 import net.sf.jaer.Description;
 import net.sf.jaer.DevelopmentStatus;
 import net.sf.jaer.chip.AEChip;
 import net.sf.jaer.event.EventPacket;
+import static net.sf.jaer.eventprocessing.EventFilter.log;
 import net.sf.jaer.eventprocessing.EventFilter2DMouseAdaptor;
 import net.sf.jaer.graphics.FrameAnnotater;
 import net.sf.jaer.util.EngineeringFormat;
+import net.sf.jaer.util.TobiLogger;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import net.sf.jaer.event.BasicEvent;
+import net.sf.jaer.event.orientation.MotionOrientationEventInterface;
+
 
 /**
  * A simple utility to do hand measurements of velocity using mouse
@@ -36,7 +47,7 @@ public class Speedometer extends EventFilter2DMouseAdaptor implements FrameAnnot
     private float speed = 0, distance, deltaTimestamp;
     EngineeringFormat engFmt = new EngineeringFormat();
     TextRenderer textRenderer = null;
-
+    protected TobiLogger motionVectorEventLogger = null;
     public Speedometer(AEChip chip) {
         super(chip);
     }
@@ -109,10 +120,14 @@ public class Speedometer extends EventFilter2DMouseAdaptor implements FrameAnnot
             }
             textRenderer.setColor(1, 1, 0, 1);
             String s = String.format("%s pps (%.0fpix /%ss)", engFmt.format(speed), distance, engFmt.format(1e-6f * deltaTimestamp));
+            String l = String.format("%s %s %s %s", currentTimestamp, engFmt.format(speed), distance, engFmt.format(1e-6f * deltaTimestamp));
+            
+            
             textRenderer.beginRendering(drawable.getSurfaceWidth(), drawable.getSurfaceHeight());
 //            Rectangle2D r = textRenderer.getBounds(s);
             textRenderer.draw(s, (startPoint.x+endPoint.x)/2,(startPoint.y+endPoint.y)/2 );
             textRenderer.endRendering();
+            if (motionVectorEventLogger != null) motionVectorEventLogger.log(l);
         }
     }
 
@@ -141,5 +156,56 @@ public class Speedometer extends EventFilter2DMouseAdaptor implements FrameAnnot
         gl.glEnd();
         gl.glPopMatrix();
     }
+    
+    synchronized public void doSaveSingleSpeed() {
 
+    
+      //String s = String.format("%d %d %d %d %.3g %.3g %.3g %d", eout.timestamp, eout.x, eout.y, eout.type, eout.velocity.x, eout.velocity.y, eout.speed, eout.hasDirection ? 1 : 0);
+      String s = String.format("%d %d %d", speed, distance, (1e-6f * deltaTimestamp));
+      motionVectorEventLogger.log(s);
+      motionVectorEventLogger.log("hellojjj");
+      log.info("button pressed");
+       
+
+//Add your code here that is exectued
+ // upon button press.
+}
+    
+    
+    synchronized public void doStartLoggingMotionVectorEvents() {
+        if (motionVectorEventLogger != null && motionVectorEventLogger.isEnabled()) {
+            log.info("logging already started");
+            return;
+        }
+        String filename = null, filepath = null;
+        final JFileChooser fc = new JFileChooser();
+        fc.setCurrentDirectory(new File(getString("lastFile", System.getProperty("user.dir"))));  // defaults to startup runtime folder
+        fc.setFileSelectionMode(JFileChooser.FILES_ONLY);
+        fc.setSelectedFile(new File(getString("lastFile", System.getProperty("user.dir"))));
+        fc.setDialogTitle("Select folder and base file name for the logged motion vector event data");
+        int ret = fc.showOpenDialog(chip.getAeViewer() != null && chip.getAeViewer().getFilterFrame() != null ? chip.getAeViewer().getFilterFrame() : null);
+        if (ret == JFileChooser.APPROVE_OPTION) {
+            File file = fc.getSelectedFile();
+            putString("lastFile", file.toString());
+            motionVectorEventLogger = new TobiLogger(file.getPath(), "Motion vector events output from normal optical flow method");
+            motionVectorEventLogger.setNanotimeEnabled(false);
+            motionVectorEventLogger.setHeaderLine("speed_pps distance_pix deltatimestamp_ms");
+            motionVectorEventLogger.setEnabled(true);
+            motionVectorEventLogger.log("it works");
+      
+        } else {
+            log.info("Cancelled logging motion vectors");
+        }    
+    }
+    
+        synchronized public void doStopLoggingMotionVectorEvents() {
+        if (motionVectorEventLogger == null) {
+            return;
+        }
+        motionVectorEventLogger.setEnabled(false);
+        motionVectorEventLogger = null;
+    }
+    
+    
+    
 }

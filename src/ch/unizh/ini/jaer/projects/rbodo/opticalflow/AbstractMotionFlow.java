@@ -146,16 +146,14 @@ abstract public class AbstractMotionFlow extends AbstractMotionFlowIMU {
     }
 
     synchronized public void setSearchDistance(int searchDistance) {
-<<<<<<< Updated upstream
         if (searchDistance > 25) {
             searchDistance = 25;
         } else if (searchDistance < 1) {
-=======
     //    if (searchDistance > 12) {
     //        searchDistance = 12;
     //    } else 
+        }
         if (searchDistance < 1) {
->>>>>>> Stashed changes
             searchDistance = 1; // limit size
         }
         while ((2 * searchDistance + 1) * (2 * searchDistance + 1) < (fitOrder + 1) * (fitOrder + 2) / 2) {

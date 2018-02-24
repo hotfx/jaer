@@ -162,7 +162,8 @@ abstract public class AbstractMotionFlowIMU extends EventFilter2D implements Obs
     boolean speedControlEnabled = getBoolean("speedControlEnabled", false);
     private float speedMixingFactor = getFloat("speedMixingFactor", 1e-3f);
     private float excessSpeedRejectFactor = getFloat("excessSpeedRejectFactor", 2f);
-
+    private float excessAngle = getFloat("Angle", 2f);
+    
     // Motion flow vectors can be filtered out if the angle between the observed 
     // optical flow and ground truth is greater than a certain threshold.
     // At the moment, this option is not included in the jAER filter settings
@@ -263,6 +264,7 @@ abstract public class AbstractMotionFlowIMU extends EventFilter2D implements Obs
         setPropertyTooltip(smoothingTT, "refractoryPeriodUs", "compute no flow vector if a flow vector has already been computed within this period at the same location.");
         setPropertyTooltip(smoothingTT, "speedControlEnabled", "enables filtering of excess speeds");
         setPropertyTooltip(smoothingTT, "speedControl_ExcessSpeedRejectFactor", "local speeds this factor higher than average are rejected as non-physical");
+        setPropertyTooltip(smoothingTT, "speedControl_ExcessAngle", "local speeds this factor higher than average are rejected as non-physical");
         setPropertyTooltip(smoothingTT, "speedControl_speedMixingFactor", "speeds computed are mixed with old values with this factor");
 //        setPropertyTooltip(imuTT, "discardOutliersForStatisticalMeasurementEnabled", "discard measured local motion vector if it deviates from IMU estimate");
 //        setPropertyTooltip(imuTT, "discardOutliersForStatisticalMeasurementMaxAngleDifferenceDeg", "threshold angle in degree. Discard measured optical flow vector if it deviates from IMU-estimate by more than discardOutliersForStatisticalMeasurementMaxAngleDifferenceDeg");
@@ -753,7 +755,7 @@ abstract public class AbstractMotionFlowIMU extends EventFilter2D implements Obs
     protected float[] motionColor(float angle) {
         return motionColor((float) Math.cos(angle), (float) Math.sin(angle), 1, 1);
     }
-
+    
     protected float[] motionColor(float angle, float saturation, float brightness) {
         return motionColor((float) Math.cos(angle), (float) Math.sin(angle), saturation, brightness);
     }
@@ -795,6 +797,7 @@ abstract public class AbstractMotionFlowIMU extends EventFilter2D implements Obs
                     motionFlowStatistics.getGlobalMotion().meanGlobalVx,
                     motionFlowStatistics.getGlobalMotion().meanGlobalVy,
                     4, ppsScale * GLOBAL_MOTION_DRAWING_SCALE);
+            //public float pastMeanGlobalMotionVx = motionFlowStatistics.getGlobalMotion().meanGlobalVx;
             gl.glRasterPos2i(2, 10);
             String flowMagPps = engFmt.format(motionFlowStatistics.getGlobalMotion().meanGlobalTrans);
             chip.getCanvas().getGlut().glutBitmapString(GLUT.BITMAP_HELVETICA_18,
@@ -1035,6 +1038,7 @@ abstract public class AbstractMotionFlowIMU extends EventFilter2D implements Obs
         }
         if (motionVectorEventLogger != null && motionVectorEventLogger.isEnabled()) {
             String s = String.format("%d %d %d %d %.3g %.3g %.3g %d", eout.timestamp, eout.x, eout.y, eout.type, eout.velocity.x, eout.velocity.y, eout.speed, eout.hasDirection ? 1 : 0);
+            //String s = String.format("%d %d %d %d %.3g %.3g %.3g %d", 333333, eout.x, eout.y, eout.type, eout.velocity.x, eout.velocity.y, eout.speed, eout.hasDirection ? 1 : 0);
             motionVectorEventLogger.log(s);
         }
         motionField.update(ts, x, y, vx, vy, v);
@@ -1058,8 +1062,7 @@ abstract public class AbstractMotionFlowIMU extends EventFilter2D implements Obs
     protected boolean isSpeeder() {
         // Discard events if velocity is too far above average
         avgSpeed = (1 - speedMixingFactor) * avgSpeed + speedMixingFactor * v;
-        //return v > avgSpeed * excessSpeedRejectFactor;
-        return true;
+        return v > avgSpeed * excessSpeedRejectFactor;
     }
     // </editor-fold>
     

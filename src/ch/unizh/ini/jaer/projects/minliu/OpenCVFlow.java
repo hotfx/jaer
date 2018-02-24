@@ -118,6 +118,9 @@ public class OpenCVFlow extends AbstractMotionFlow
 
     private JFrame OFResultFrame = null;
     protected boolean showAPSFrameDisplay = getBoolean("showAPSFrameDisplay", true);
+    private float showAngle2 = getFloat("showAngle", 1f);
+    protected boolean AngleSmoothing = getBoolean("AngleSmoothing", true);
+    boolean AngleSmoothing2 = getBoolean("AngleSmoothing2", true);
     private int[][] color = new int[100][3];
     private float[] oldBuffer = null, newBuffer = null;
     private PatchMatchFlow patchFlow;
@@ -137,6 +140,10 @@ public class OpenCVFlow extends AbstractMotionFlow
             public void windowClosing(final WindowEvent e) {
                 setShowAPSFrameDisplay(false);
             }
+            
+            float a = showAngle2;
+            boolean b = AngleSmoothing;
+            boolean c = AngleSmoothing2;
         });
 
         FilterChain chain = new FilterChain(chip);
@@ -161,6 +168,8 @@ public class OpenCVFlow extends AbstractMotionFlow
         }
         setupFilter(in);
 
+        boolean d = AngleSmoothing2;
+        
         if (showAPSFrameDisplay && !OFResultFrame.isVisible()) {
             OFResultFrame.setVisible(true);
         }
@@ -192,11 +201,12 @@ public class OpenCVFlow extends AbstractMotionFlow
     public synchronized void resetFilter() {
         super.resetFilter();
 
-        if (patchFlow != null) {
-            patchFlow.resetFilter();
-        }
-
+//        if (patchFlow != null) {
+//            patchFlow.resetFilter();
+//        }
+    if(OFResultDisplay!=null){
         OFResultDisplay.setImageSize(chip.getSizeX(), chip.getSizeY());
+    }
     }
 
     @Override
@@ -373,7 +383,7 @@ public class OpenCVFlow extends AbstractMotionFlow
                     vx = (float) (nextPoints[index].x - prevPoints[index].x) * 1000000 / -patchFlow.getSliceDeltaT();
                     vy = (float) (nextPoints[index].y - prevPoints[index].y) * 1000000 / -patchFlow.getSliceDeltaT();
                     v = (float) Math.sqrt(vx * vx + vy * vy);
-                    processGoodEvent();
+                    if(!isAngle23()){processGoodEvent();}
                     index++;
                 }
             }
@@ -487,4 +497,45 @@ public class OpenCVFlow extends AbstractMotionFlow
         }
         getSupport().firePropertyChange("showAPSFrameDisplay", null, showAPSFrameDisplay);
     }
+   
+    
+     // <editor-fold defaultstate="collapsed" desc="getter/setter for --thr--">
+    public float getAngle2() {
+        return this.showAngle2;
+    }
+
+    public void setAngle2(final float showAngle2) {
+        this.showAngle2 = showAngle2;
+        putFloat("showAngle2", showAngle2);
+    }
+
+    public void setAngleSmoothing(final boolean AngleSmoothing) {
+        this.AngleSmoothing = AngleSmoothing;
+        putBoolean("AngleSmoothing", AngleSmoothing);
+    }
+    
+    public void setAngleSmoothing2(boolean AngleSmoothing2) {
+        this.AngleSmoothing2 = AngleSmoothing2;
+        putBoolean("AngleSmoothing2", AngleSmoothing2);
+    }
+
+    public boolean isAngle23() {
+        
+        boolean angleWrong;
+        if(getAngle2()==0) return false;
+        if(vx==0) return true;
+        if(vx!=0){
+        angleWrong = (getAngle2() < Math.atan(vy/vx)) || (-getAngle2() > Math.atan(vy/vx)) || (vx < 0) ;
+        return angleWrong;}
+        return false;
+    }
+    
+    public boolean isCorrectLength(){
+     double smoothingFactor = 1.2;   
+     double averageVx = motionFlowStatistics.getGlobalMotion().meanGlobalVx;
+     //double pastAverageVx = pastMeanGlobalMotionVx; to be found in AbstractMotion 797
+     double averageVy = motionFlowStatistics.getGlobalMotion().meanGlobalVx;
+     return false;
+    }
+    
 }
