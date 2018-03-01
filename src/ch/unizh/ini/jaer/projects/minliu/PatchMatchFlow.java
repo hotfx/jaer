@@ -31,15 +31,21 @@ import ch.unizh.ini.jaer.projects.rbodo.opticalflow.AbstractMotionFlow;
 import com.jogamp.opengl.GLException;
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.InputMismatchException;
 import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.Scanner;
 import java.util.StringTokenizer;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.logging.Logger;
 import javax.swing.JFileChooser;
 import net.sf.jaer.Description;
 import net.sf.jaer.DevelopmentStatus;
@@ -172,13 +178,15 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
     private int[][] areaCounts = null;
     private boolean areaCountExceeded = false;
     //Parameters for SpeedInput SliceMethod
-    private int speedFactor = getInt("speedFactor", 1);
-    private int MIN_SPEED_FACTOR = 0;
-    private int MAX_SPEED_FACTOR = Integer.MAX_VALUE;
+    private int speedDividend = getInt("SpeedDividend", 2500000);
+    private int MIN_SPEED_DIVIDEND = 100000;
+    private int MAX_SPEED_DIVIDEND = Integer.MAX_VALUE;
     public InputStream speedIn;
+    boolean endOfSpeedFile;
     private BufferedReader speedReader;
-    private int inputSpeed;
-    private int nextInputSpeed, inputSpeedTs, nextInputSpeedTs;
+    private Scanner speedScanner;
+    private float inputSpeed, nextInputSpeed;
+    private int inputSpeedTs, nextInputSpeedTs;
 
     // nongreedy flow evaluation
     // the entire scene is subdivided into regions, and a bitmap of these regions distributed flow computation more fairly
@@ -270,6 +278,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         setPropertyTooltip(patchTT, "showSlice", "Scales to compute, e.g. 1,2; blank for all scales. 0 is full resolution, 1 is subsampled 2x2, etc");
         setPropertyTooltip(patchTT, "defaults", "Sets reasonable defaults");
         setPropertyTooltip(patchTT, "enableImuTimesliceLogging", "Logs IMU and rate gyro");
+        setPropertyTooltip(patchTT, "SpeedDividend", "This divided by the input speed gives the final SliceDurationUs");
 
         String patchDispTT = "0b: Block matching display";
         setPropertyTooltip(patchDispTT, "showSliceBitMap", "enables displaying the slices' bitmap");
@@ -421,10 +430,10 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
             v = (float) Math.sqrt((vx * vx) + (vy * vy));
             // TODO debug
             StringBuilder sadValsString = new StringBuilder();
-            for (int k=0;k<sadVals.length-1;k++) {
+            for (int k = 0; k < sadVals.length - 1; k++) {
                 sadValsString.append(String.format("%f,", sadVals[k]));
             }
-            sadValsString.append(String.format("%f", sadVals[sadVals.length-1])); // very awkward to prevent trailing ,
+            sadValsString.append(String.format("%f", sadVals[sadVals.length - 1])); // very awkward to prevent trailing ,
             if (sadValueLogger.isEnabled()) { // TODO debug
                 sadValueLogger.log(sadValsString.toString());
             }
@@ -869,9 +878,12 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                     return false;
                 }
             case SpeedInput:
-                if(dt < getSpeed() * speedFactor){
-                    return false;
-                }
+                float speed = getSpeed();
+                if(speed != 0){
+                    if (dt < getSpeedSliceDuration() && dt < MAX_SLICE_DURATION_US) {
+                        return false;
+                    }
+                } else 
                 break;
         }
 
@@ -890,7 +902,9 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
      *
      */
     private void rotateSlices() {
-        if(e!=null) sliceEndTimeUs[currentSliceIdx]=e.timestamp;
+        if (e != null) {
+            sliceEndTimeUs[currentSliceIdx] = e.timestamp;
+        }
         /*Thus if 0 is current index for current filling slice, then sliceIndex returns 1,2 for pointer =1,2.
         * Then if NUM_SLICES=3, after rotateSlices(),
         currentSliceIdx=NUM_SLICES-1=2, and sliceIndex(0)=2, sliceIndex(1)=0, sliceIndex(2)=1.
@@ -932,19 +946,20 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
      *
      * @param pointer how many slices in the past to index for. I.e.. 0 for
      * current slice (one being currently filled), 1 for next oldest, 2 for
-     * oldest (when using NUM_SLICES=3). Only meaningful for pointer>=2, currently exactly only pointer==2 since
-     * we are using only 3 slices.
-     * 
-     * Modified to compute the delta time using the average of start and end timestamps of each slices, i.e. the slice 
-     * time "midpoint" where midpoint is defined by average of first and last timestamp. 
+     * oldest (when using NUM_SLICES=3). Only meaningful for pointer>=2,
+     * currently exactly only pointer==2 since we are using only 3 slices.
+     *
+     * Modified to compute the delta time using the average of start and end
+     * timestamps of each slices, i.e. the slice time "midpoint" where midpoint
+     * is defined by average of first and last timestamp.
      *
      */
     private int sliceDeltaTimeUs(int pointer) {
 //        System.out.println("dt(" + pointer + ")=" + (sliceStartTimeUs[sliceIndex(1)] - sliceStartTimeUs[sliceIndex(pointer)]));
-        int idxOlder=sliceIndex(pointer), idxYounger=sliceIndex(1);
-        int tOlder=(sliceStartTimeUs[idxOlder]+sliceEndTimeUs[idxOlder])/2;
-        int tYounger=(sliceStartTimeUs[idxYounger]+sliceEndTimeUs[idxYounger])/2;
-        int dt=tYounger-tOlder;
+        int idxOlder = sliceIndex(pointer), idxYounger = sliceIndex(1);
+        int tOlder = (sliceStartTimeUs[idxOlder] + sliceEndTimeUs[idxOlder]) / 2;
+        int tYounger = (sliceStartTimeUs[idxYounger] + sliceEndTimeUs[idxYounger]) / 2;
+        int dt = tYounger - tOlder;
         return dt;
     }
 
@@ -1360,9 +1375,9 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
 //        final int maxSaturatedPixNum = (int) ((1 - this.validPixOccupancy) * blockArea);
         final float sadNormalizer = 1f / (blockArea * (rectifyPolarties ? 2 : 1) * sliceMaxValue);
         // if current or previous block has insufficient pixels with values or if all the pixels are filled up, then reject match
-        if (    (validPixNumCurSlice < minValidPixNum) 
-                || (validPixNumPrevSlice < minValidPixNum) 
-                ||  (nonZeroMatchCount < minValidPixNum) //                || (saturatedPixNumCurSlice >= maxSaturatedPixNum) || (saturatedPixNumPrevSlice >= maxSaturatedPixNum)
+        if ((validPixNumCurSlice < minValidPixNum)
+                || (validPixNumPrevSlice < minValidPixNum)
+                || (nonZeroMatchCount < minValidPixNum) //                || (saturatedPixNumCurSlice >= maxSaturatedPixNum) || (saturatedPixNumPrevSlice >= maxSaturatedPixNum)
                 ) {  // If valid pixel number of any slice is 0, then we set the distance to very big value so we can exclude it.
             return 1; // tobi changed to 1 to represent max distance // Float.MAX_VALUE;
         } else {
@@ -1779,28 +1794,14 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         if (sliceMethod == SliceMethod.AreaEventNumber || sliceMethod == SliceMethod.ConstantIntegratedFlow) {
             showAreasForAreaCountsTemporarily();
         } else if (sliceMethod == SliceMethod.SpeedInput) {
-            if (speedReader != null) {
-                log.info("SpeedInputFile already chosen");
-                return;
-            }
-            String filename = null, filepath = null;
-            final JFileChooser fc = new JFileChooser();
-            fc.setCurrentDirectory(new File(getString("lastFile", System.getProperty("user.dir"))));  // defaults to startup runtime folder
-            fc.setFileSelectionMode(JFileChooser.FILES_ONLY);
-            fc.setSelectedFile(new File(getString("lastFile", System.getProperty("user.dir"))));
-            fc.setDialogTitle("Select folder and file to read recorded speed from");
-            int ret = fc.showOpenDialog(chip.getAeViewer() != null && chip.getAeViewer().getFilterFrame() != null ? chip.getAeViewer().getFilterFrame() : null);
-            if (ret == JFileChooser.APPROVE_OPTION) {
-                File file = fc.getSelectedFile();
-                putString("lastFile", file.toString());
-                setSpeedInputFile(file);
-            } else {
-                log.info("Cancelled logging motion vectors");
-            }
+            //SpeedInputFile is set
+            setSpeedInputFile();
+
         }
 //        if(sliceMethod==SliceMethod.ConstantIntegratedFlow){
 //            setDisplayGlobalMotion(true);
 //        }
+
         getSupport().firePropertyChange("sliceMethod", old, this.sliceMethod);
     }
 
@@ -2642,53 +2643,98 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         this.nonGreedyFractionToBeServiced = nonGreedyFractionToBeServiced;
         putFloat("nonGreedyFractionToBeServiced", nonGreedyFractionToBeServiced);
     }
-    
-    /**
-     * @return the SpeedFactor 
-    */
-    public int getSpeedFactor(){
-        return speedFactor;
-    }
-    
-    public void setSpeedfactor(int speedFactor){
-        int old = this.speedFactor;
-        if (speedFactor < MIN_SPEED_FACTOR) {
-            speedFactor = MIN_SPEED_FACTOR;
-        } else if (speedFactor > MAX_SPEED_FACTOR) {
-            speedFactor = MAX_SPEED_FACTOR; // limit it to one second
-        }
-        this.speedFactor = speedFactor;
 
-        putInt("SpeedFactor", speedFactor);
-        getSupport().firePropertyChange("sliceDurationUs", old, this.speedFactor);
+    /**
+     * @return the SpeedDividend
+     */
+    public int getSpeedDividend() {
+        return speedDividend;
     }
-    
-    public void setSpeedInputFile(File speedInputFile){
-        try (InputStream in = Files.newInputStream(speedInputFile.toPath()); BufferedReader reader  = new BufferedReader(new InputStreamReader(speedIn))){
-            speedReader = reader;
-            
-        } catch (IOException io) {
-            System.err.println("setSpeedInputFile:" + io);
+
+    public void setSpeedDividend(int speedDividend) {
+        int old = this.speedDividend;
+        this.speedDividend = speedDividend;
+        if (speedDividend < MIN_SPEED_DIVIDEND) {
+            speedDividend = MIN_SPEED_DIVIDEND;
+        } else if (speedDividend > MAX_SPEED_DIVIDEND) {
+            speedDividend = MAX_SPEED_DIVIDEND; // limit it to one second
         }
+        this.speedDividend = speedDividend;
+
+        putInt("SpeedDividend", speedDividend);
+        getSupport().firePropertyChange("SpeedDividend", old, this.speedDividend);
     }
+
+    public void setSpeedInputFile() {
+        log.info("Setting Speed Input File");
+        String filename = null, filepath = null;
+        final JFileChooser fc = new JFileChooser();
+        fc.setCurrentDirectory(new File(getString("lastFile", System.getProperty("user.dir"))));  // defaults to startup runtime folder
+        fc.setFileSelectionMode(JFileChooser.FILES_ONLY);
+        fc.setSelectedFile(new File(getString("lastFile", System.getProperty("user.dir"))));
+        fc.setDialogTitle("Select file to read recorded speed from");
+        int ret = fc.showOpenDialog(chip.getAeViewer() != null && chip.getAeViewer().getFilterFrame() != null ? chip.getAeViewer().getFilterFrame() : null);
+        if (ret == JFileChooser.APPROVE_OPTION) {
+            File file = fc.getSelectedFile();
+            putString("lastFile", file.toString());
+            try {
+                speedReader = new BufferedReader(new FileReader(file.toString()));
+                speedReader.readLine(); //skip header
+                
+                }catch (FileNotFoundException ex) {
+                Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
+            } catch (IOException ex) {
+                Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
+            }
+            }else {
+            log.info("Cancelled, no Input file selected");
+        }
+
+        }
+
     
-    public int getSpeed(){
-        if(ts > nextInputSpeedTs){
+
+    public float getSpeed() {
+        if (speedReader == null) {
+            setSpeedInputFile();
+        }
+        while (ts > nextInputSpeedTs) {
             inputSpeedTs = nextInputSpeedTs;
             inputSpeed = nextInputSpeed;
-            try{
-                String[] nextSpeedLine = null;
-                nextSpeedLine = speedReader.readLine().split(" ");
+            try {
+                String[] nextSpeedLine;
+                nextSpeedLine = speedReader.readLine().split("\t");
                 nextInputSpeedTs = Integer.parseInt(nextSpeedLine[0]);
-                nextInputSpeed = Integer.parseInt(nextSpeedLine[1]);
-            } catch (NullPointerException np){
-                System.err.println("End of Speedfile");
-            } catch (IOException io){
+                nextInputSpeed = Float.parseFloat(nextSpeedLine[1]);
+                log.info("New speed read: "+nextInputSpeed);
+            } catch (NullPointerException np) {
+                if (!endOfSpeedFile) {
+                    System.err.println("End of Speedfile");
+                    endOfSpeedFile = true;
+                }
+            } catch (IOException io) {
                 System.err.println("No SpeedInputFile");
+            } catch (InputMismatchException iMm) {
+                System.err.println("Speedfile has bad format.");
+                System.err.println("After a header line usTimestamp and speed divided by \t");
+            } catch (NoSuchElementException nse) {
+                System.err.println("Wrong Speedfile type");
             }
         }
         return inputSpeed;
     }
-            
+    
+    public int getSpeedSliceDuration(){
+        float speed = getSpeed();
+        int sd;
+        if(speed != 0){
+            sd = (int) (speedDividend / getSpeed());
+        } else {
+            sd = this.sliceDurationUs;
+        }
+        setSliceDurationUs(sd);
+        
+        return sd;
+    }
 
 }
