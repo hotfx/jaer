@@ -38,6 +38,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.InputMismatchException;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
@@ -181,12 +182,11 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
     private int speedDividend = getInt("SpeedDividend", 2500000);
     private int MIN_SPEED_DIVIDEND = 100000;
     private int MAX_SPEED_DIVIDEND = Integer.MAX_VALUE;
-    public InputStream speedIn;
-    boolean endOfSpeedFile;
+    private boolean endOfSpeedFile;
+    private int speedArrayPointer;
     private BufferedReader speedReader;
-    private Scanner speedScanner;
-    private float inputSpeed, nextInputSpeed;
-    private int inputSpeedTs, nextInputSpeedTs;
+    private ArrayList<Integer> timeStamps;
+    private ArrayList<Float> speeds;
 
     // nongreedy flow evaluation
     // the entire scene is subdivided into regions, and a bitmap of these regions distributed flow computation more fairly
@@ -878,12 +878,9 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                     return false;
                 }
             case SpeedInput:
-                float speed = getSpeed();
-                if(speed != 0){
-                    if (dt < getSpeedSliceDuration() && dt < MAX_SLICE_DURATION_US) {
-                        return false;
-                    }
-                } else 
+                if (dt < getSpeedSliceDuration() && dt < MAX_SLICE_DURATION_US) {
+                    return false;
+                }
                 break;
         }
 
@@ -2680,60 +2677,49 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
             try {
                 speedReader = new BufferedReader(new FileReader(file.toString()));
                 speedReader.readLine(); //skip header
-                
-                }catch (FileNotFoundException ex) {
+
+                timeStamps = new ArrayList();
+                speeds = new ArrayList();
+                String[] nextSpeedLine;
+                nextSpeedLine = speedReader.readLine().split("\t");
+
+                while (nextSpeedLine != null) {
+                    timeStamps.add(Integer.parseInt(nextSpeedLine[0]));
+                    speeds.add(Float.parseFloat(nextSpeedLine[1]));
+                    nextSpeedLine = speedReader.readLine().split("\t");
+                }
+
+            } catch (FileNotFoundException ex) {
                 Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
             } catch (IOException ex) {
                 Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
             }
-            }else {
+        } else {
             log.info("Cancelled, no Input file selected");
         }
 
-        }
+    }
 
-    
-
-    public float getSpeed() {
-        if (speedReader == null) {
+    public int getSpeedSliceDuration() {
+        if (speeds == null) {
             setSpeedInputFile();
         }
-        while (ts > nextInputSpeedTs) {
-            inputSpeedTs = nextInputSpeedTs;
-            inputSpeed = nextInputSpeed;
-            try {
-                String[] nextSpeedLine;
-                nextSpeedLine = speedReader.readLine().split("\t");
-                nextInputSpeedTs = Integer.parseInt(nextSpeedLine[0]);
-                nextInputSpeed = Float.parseFloat(nextSpeedLine[1]);
-                log.info("New speed read: "+nextInputSpeed);
-            } catch (NullPointerException np) {
-                if (!endOfSpeedFile) {
-                    System.err.println("End of Speedfile");
-                    endOfSpeedFile = true;
-                }
-            } catch (IOException io) {
-                System.err.println("No SpeedInputFile");
-            } catch (InputMismatchException iMm) {
-                System.err.println("Speedfile has bad format.");
-                System.err.println("After a header line usTimestamp and speed divided by \t");
-            } catch (NoSuchElementException nse) {
-                System.err.println("Wrong Speedfile type");
+        if (ts > timeStamps.get(speedArrayPointer)) {
+            speedArrayPointer++;
+            if (speedArrayPointer >= speeds.size()) {
+                speedArrayPointer = 0;
             }
         }
-        return inputSpeed;
-    }
-    
-    public int getSpeedSliceDuration(){
-        float speed = getSpeed();
+        float speed = speeds.get(speedArrayPointer);
+
         int sd;
-        if(speed != 0){
-            sd = (int) (speedDividend / getSpeed());
+        if (speed != 0) {
+            sd = (int) (speedDividend / speed);
         } else {
             sd = this.sliceDurationUs;
         }
         setSliceDurationUs(sd);
-        
+
         return sd;
     }
 
