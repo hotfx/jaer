@@ -2682,12 +2682,11 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                 timeStamps = new int[speedFileSize];
                 speeds = new float[speedFileSize];
                 String[] nextSpeedLine;
-                nextSpeedLine = speedReader.readLine().split("\t");
 
-                for(int i = 0; i < speedFileSize; i++) {
+                for(int i = 0; i < speedFileSize-1; i++) {
+                    nextSpeedLine = speedReader.readLine().split("\t");
                     timeStamps[i] = Integer.parseInt(nextSpeedLine[0]);
                     speeds[i] = Float.parseFloat(nextSpeedLine[1]);
-                    nextSpeedLine = speedReader.readLine().split("\t");
                 }
                 
                 speedReader.close();
@@ -2710,7 +2709,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
             BufferedReader tempReader = new BufferedReader(new FileReader(file.toString()));
             String nextLine = tempReader.readLine(); //skip header
             
-            for(size = 0; !nextLine.isEmpty(); size++){
+            for(size = 0; nextLine != null; size++){
                 nextLine = tempReader.readLine();
             }
             
