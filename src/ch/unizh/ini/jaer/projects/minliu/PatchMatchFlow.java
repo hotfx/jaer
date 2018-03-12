@@ -29,10 +29,25 @@ import com.jogamp.opengl.util.awt.TextRenderer;
 
 import ch.unizh.ini.jaer.projects.rbodo.opticalflow.AbstractMotionFlow;
 import com.jogamp.opengl.GLException;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.InputMismatchException;
 import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.Scanner;
 import java.util.StringTokenizer;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.logging.Logger;
+import javax.swing.JFileChooser;
 import net.sf.jaer.Description;
 import net.sf.jaer.DevelopmentStatus;
 import net.sf.jaer.chip.AEChip;
@@ -41,6 +56,7 @@ import net.sf.jaer.event.ApsDvsEventPacket;
 import net.sf.jaer.event.EventPacket;
 import net.sf.jaer.event.PolarityEvent;
 import net.sf.jaer.eventio.AEInputStream;
+import static net.sf.jaer.eventprocessing.EventFilter.log;
 import net.sf.jaer.eventprocessing.TimeLimiter;
 import net.sf.jaer.graphics.AEViewer;
 import net.sf.jaer.graphics.FrameAnnotater;
@@ -155,13 +171,22 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
     private boolean displayResultHistogram = getBoolean("displayResultHistogram", true);
 
     public enum SliceMethod {
-        ConstantDuration, ConstantEventNumber, AreaEventNumber, ConstantIntegratedFlow
+        ConstantDuration, ConstantEventNumber, AreaEventNumber, ConstantIntegratedFlow, SpeedInput
     };
     private SliceMethod sliceMethod = SliceMethod.valueOf(getString("sliceMethod", SliceMethod.AreaEventNumber.toString()));
     // counting events into subsampled areas, when count exceeds the threshold in any area, the slices are rotated
     private int areaEventNumberSubsampling = getInt("areaEventNumberSubsampling", 5);
     private int[][] areaCounts = null;
     private boolean areaCountExceeded = false;
+    //Parameters for SpeedInput SliceMethod
+    private int speedDividend = getInt("SpeedDividend", 2500000);
+    private int MIN_SPEED_DIVIDEND = 100000;
+    private int MAX_SPEED_DIVIDEND = Integer.MAX_VALUE;
+    private boolean endOfSpeedFile;
+    private int speedArrayPointer;
+    private BufferedReader speedReader;
+    private ArrayList<Integer> timeStamps;
+    private ArrayList<Float> speeds;
 
     // nongreedy flow evaluation
     // the entire scene is subdivided into regions, and a bitmap of these regions distributed flow computation more fairly
@@ -232,7 +257,8 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                 + "<li>ConstantDuration: slices are fixed time duration"
                 + "<li>ConstantEventNumber: slices are fixed event number"
                 + "<li>AreaEventNumber: slices are fixed event number in any subsampled area defined by areaEventNumberSubsampling"
-                + "<li>ConstantIntegratedFlow: slices are rotated when average speeds times delta time exceeds half the search distance");
+                + "<li>ConstantIntegratedFlow: slices are rotated when average speeds times delta time exceeds half the search distance"
+                + "<li>SpeedInput: slice duration depends on speed input from file");
         setPropertyTooltip(patchTT, "areaEventNumberSubsampling", "<html>how to subsample total area to count events per unit subsampling blocks for AreaEventNumber method. <p>For example, if areaEventNumberSubsampling=5, <br> then events falling into 32x32 blocks of pixels are counted <br>to determine when they exceed sliceEventCount to make new slice");
         setPropertyTooltip(patchTT, "skipProcessingEventsCount", "skip this many events for processing (but not for accumulating to bitmaps)");
         setPropertyTooltip(patchTT, "adaptiveEventSkipping", "enables adaptive event skipping depending on free time left in AEViewer animation loop");
@@ -252,6 +278,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         setPropertyTooltip(patchTT, "showSlice", "Scales to compute, e.g. 1,2; blank for all scales. 0 is full resolution, 1 is subsampled 2x2, etc");
         setPropertyTooltip(patchTT, "defaults", "Sets reasonable defaults");
         setPropertyTooltip(patchTT, "enableImuTimesliceLogging", "Logs IMU and rate gyro");
+        setPropertyTooltip(patchTT, "SpeedDividend", "This divided by the input speed gives the final SliceDurationUs");
 
         String patchDispTT = "0b: Block matching display";
         setPropertyTooltip(patchDispTT, "showSliceBitMap", "enables displaying the slices' bitmap");
@@ -403,10 +430,10 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
             v = (float) Math.sqrt((vx * vx) + (vy * vy));
             // TODO debug
             StringBuilder sadValsString = new StringBuilder();
-            for (int k=0;k<sadVals.length-1;k++) {
+            for (int k = 0; k < sadVals.length - 1; k++) {
                 sadValsString.append(String.format("%f,", sadVals[k]));
             }
-            sadValsString.append(String.format("%f", sadVals[sadVals.length-1])); // very awkward to prevent trailing ,
+            sadValsString.append(String.format("%f", sadVals[sadVals.length - 1])); // very awkward to prevent trailing ,
             if (sadValueLogger.isEnabled()) { // TODO debug
                 sadValueLogger.log(sadValsString.toString());
             }
@@ -564,6 +591,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                         setSliceDurationUs(sliceDurationUs + durChange);
                         break;
                     case ConstantEventNumber:
+                        break;
                     case AreaEventNumber:
                         if (errSign > 0 && sliceDeltaTimeUs(2) < getSliceDurationUs()) { // don't increase slice past the sliceDurationUs limit
                             // match too short, increase count
@@ -574,6 +602,8 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                         break;
                     case ConstantIntegratedFlow:
                         setSliceEventCount(eventCounter);
+                        break;
+                    case SpeedInput:
                 }
                 if (adaptiveSliceDurationLogger != null && adaptiveSliceDurationLogger.isEnabled()) {
                     if (!isDisplayGlobalMotion()) {
@@ -847,6 +877,10 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                 if (totalMovement < searchDistance / 2 && dt < sliceDurationUs) {
                     return false;
                 }
+            case SpeedInput:
+                if (dt < getSpeedSliceDuration() && dt < MAX_SLICE_DURATION_US) {
+                    return false;
+                }
                 break;
         }
 
@@ -865,7 +899,9 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
      *
      */
     private void rotateSlices() {
-        if(e!=null) sliceEndTimeUs[currentSliceIdx]=e.timestamp;
+        if (e != null) {
+            sliceEndTimeUs[currentSliceIdx] = e.timestamp;
+        }
         /*Thus if 0 is current index for current filling slice, then sliceIndex returns 1,2 for pointer =1,2.
         * Then if NUM_SLICES=3, after rotateSlices(),
         currentSliceIdx=NUM_SLICES-1=2, and sliceIndex(0)=2, sliceIndex(1)=0, sliceIndex(2)=1.
@@ -907,19 +943,20 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
      *
      * @param pointer how many slices in the past to index for. I.e.. 0 for
      * current slice (one being currently filled), 1 for next oldest, 2 for
-     * oldest (when using NUM_SLICES=3). Only meaningful for pointer>=2, currently exactly only pointer==2 since
-     * we are using only 3 slices.
-     * 
-     * Modified to compute the delta time using the average of start and end timestamps of each slices, i.e. the slice 
-     * time "midpoint" where midpoint is defined by average of first and last timestamp. 
+     * oldest (when using NUM_SLICES=3). Only meaningful for pointer>=2,
+     * currently exactly only pointer==2 since we are using only 3 slices.
+     *
+     * Modified to compute the delta time using the average of start and end
+     * timestamps of each slices, i.e. the slice time "midpoint" where midpoint
+     * is defined by average of first and last timestamp.
      *
      */
     private int sliceDeltaTimeUs(int pointer) {
 //        System.out.println("dt(" + pointer + ")=" + (sliceStartTimeUs[sliceIndex(1)] - sliceStartTimeUs[sliceIndex(pointer)]));
-        int idxOlder=sliceIndex(pointer), idxYounger=sliceIndex(1);
-        int tOlder=(sliceStartTimeUs[idxOlder]+sliceEndTimeUs[idxOlder])/2;
-        int tYounger=(sliceStartTimeUs[idxYounger]+sliceEndTimeUs[idxYounger])/2;
-        int dt=tYounger-tOlder;
+        int idxOlder = sliceIndex(pointer), idxYounger = sliceIndex(1);
+        int tOlder = (sliceStartTimeUs[idxOlder] + sliceEndTimeUs[idxOlder]) / 2;
+        int tYounger = (sliceStartTimeUs[idxYounger] + sliceEndTimeUs[idxYounger]) / 2;
+        int dt = tYounger - tOlder;
         return dt;
     }
 
@@ -1335,9 +1372,9 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
 //        final int maxSaturatedPixNum = (int) ((1 - this.validPixOccupancy) * blockArea);
         final float sadNormalizer = 1f / (blockArea * (rectifyPolarties ? 2 : 1) * sliceMaxValue);
         // if current or previous block has insufficient pixels with values or if all the pixels are filled up, then reject match
-        if (    (validPixNumCurSlice < minValidPixNum) 
-                || (validPixNumPrevSlice < minValidPixNum) 
-                ||  (nonZeroMatchCount < minValidPixNum) //                || (saturatedPixNumCurSlice >= maxSaturatedPixNum) || (saturatedPixNumPrevSlice >= maxSaturatedPixNum)
+        if ((validPixNumCurSlice < minValidPixNum)
+                || (validPixNumPrevSlice < minValidPixNum)
+                || (nonZeroMatchCount < minValidPixNum) //                || (saturatedPixNumCurSlice >= maxSaturatedPixNum) || (saturatedPixNumPrevSlice >= maxSaturatedPixNum)
                 ) {  // If valid pixel number of any slice is 0, then we set the distance to very big value so we can exclude it.
             return 1; // tobi changed to 1 to represent max distance // Float.MAX_VALUE;
         } else {
@@ -1753,10 +1790,15 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         putString("sliceMethod", sliceMethod.toString());
         if (sliceMethod == SliceMethod.AreaEventNumber || sliceMethod == SliceMethod.ConstantIntegratedFlow) {
             showAreasForAreaCountsTemporarily();
+        } else if (sliceMethod == SliceMethod.SpeedInput) {
+            //SpeedInputFile is set
+            setSpeedInputFile();
+
         }
 //        if(sliceMethod==SliceMethod.ConstantIntegratedFlow){
 //            setDisplayGlobalMotion(true);
 //        }
+
         getSupport().firePropertyChange("sliceMethod", old, this.sliceMethod);
     }
 
@@ -2059,7 +2101,6 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
     }
 
     /**
-     * @param showSliceBitMap
      * @param showSliceBitMap the option of displaying bitmap
      */
     synchronized public void setShowSliceBitMap(boolean showSliceBitMap) {
@@ -2269,7 +2310,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                             + engFmt.format(result.sadValue);
                 }
             }
-        } catch (ArrayIndexOutOfBoundsException e) {
+        } catch (ArrayIndexOutOfBoundsException a) {
 
         }
 
@@ -2430,7 +2471,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                     try {
                         int scale = Integer.parseInt(st.nextToken());
                         scalesToComputeArray[i++] = scale;
-                    } catch (NumberFormatException e) {
+                    } catch (NumberFormatException nfE) {
                         log.warning("bad string in scalesToCompute field, use blank or 0,2 for example");
                         setDefaultScalesToCompute();
                     }
@@ -2598,6 +2639,88 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
     public void setNonGreedyFractionToBeServiced(float nonGreedyFractionToBeServiced) {
         this.nonGreedyFractionToBeServiced = nonGreedyFractionToBeServiced;
         putFloat("nonGreedyFractionToBeServiced", nonGreedyFractionToBeServiced);
+    }
+
+    /**
+     * @return the SpeedDividend
+     */
+    public int getSpeedDividend() {
+        return speedDividend;
+    }
+
+    public void setSpeedDividend(int speedDividend) {
+        int old = this.speedDividend;
+        this.speedDividend = speedDividend;
+        if (speedDividend < MIN_SPEED_DIVIDEND) {
+            speedDividend = MIN_SPEED_DIVIDEND;
+        } else if (speedDividend > MAX_SPEED_DIVIDEND) {
+            speedDividend = MAX_SPEED_DIVIDEND; // limit it to one second
+        }
+        this.speedDividend = speedDividend;
+
+        putInt("SpeedDividend", speedDividend);
+        getSupport().firePropertyChange("SpeedDividend", old, this.speedDividend);
+    }
+
+    public void setSpeedInputFile() {
+        log.info("Setting Speed Input File");
+        String filename = null, filepath = null;
+        final JFileChooser fc = new JFileChooser();
+        fc.setCurrentDirectory(new File(getString("lastFile", System.getProperty("user.dir"))));  // defaults to startup runtime folder
+        fc.setFileSelectionMode(JFileChooser.FILES_ONLY);
+        fc.setSelectedFile(new File(getString("lastFile", System.getProperty("user.dir"))));
+        fc.setDialogTitle("Select file to read recorded speed from");
+        int ret = fc.showOpenDialog(chip.getAeViewer() != null && chip.getAeViewer().getFilterFrame() != null ? chip.getAeViewer().getFilterFrame() : null);
+        if (ret == JFileChooser.APPROVE_OPTION) {
+            File file = fc.getSelectedFile();
+            putString("lastFile", file.toString());
+            try {
+                speedReader = new BufferedReader(new FileReader(file.toString()));
+                speedReader.readLine(); //skip header
+
+                timeStamps = new ArrayList();
+                speeds = new ArrayList();
+                String[] nextSpeedLine;
+                nextSpeedLine = speedReader.readLine().split("\t");
+
+                while (nextSpeedLine != null) {
+                    timeStamps.add(Integer.parseInt(nextSpeedLine[0]));
+                    speeds.add(Float.parseFloat(nextSpeedLine[1]));
+                    nextSpeedLine = speedReader.readLine().split("\t");
+                }
+
+            } catch (FileNotFoundException ex) {
+                Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
+            } catch (IOException ex) {
+                Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
+            }
+        } else {
+            log.info("Cancelled, no Input file selected");
+        }
+
+    }
+
+    public int getSpeedSliceDuration() {
+        if (speeds == null) {
+            setSpeedInputFile();
+        }
+        if (ts > timeStamps.get(speedArrayPointer)) {
+            speedArrayPointer++;
+            if (speedArrayPointer >= speeds.size()) {
+                speedArrayPointer = 0;
+            }
+        }
+        float speed = speeds.get(speedArrayPointer);
+
+        int sd;
+        if (speed != 0) {
+            sd = (int) (speedDividend / speed);
+        } else {
+            sd = this.sliceDurationUs;
+        }
+        setSliceDurationUs(sd);
+
+        return sd;
     }
 
 }
