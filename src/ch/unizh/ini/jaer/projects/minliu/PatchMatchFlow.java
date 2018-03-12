@@ -185,8 +185,8 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
     private boolean endOfSpeedFile;
     private int speedArrayPointer;
     private BufferedReader speedReader;
-    private ArrayList<Integer> timeStamps;
-    private ArrayList<Float> speeds;
+    private int[] timeStamps;
+    private float[] speeds;
 
     // nongreedy flow evaluation
     // the entire scene is subdivided into regions, and a bitmap of these regions distributed flow computation more fairly
@@ -2677,17 +2677,20 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
             try {
                 speedReader = new BufferedReader(new FileReader(file.toString()));
                 speedReader.readLine(); //skip header
-
-                timeStamps = new ArrayList();
-                speeds = new ArrayList();
+                int speedFileSize = getSpeedFileSize(file);
+                
+                timeStamps = new int[speedFileSize];
+                speeds = new float[speedFileSize];
                 String[] nextSpeedLine;
                 nextSpeedLine = speedReader.readLine().split("\t");
 
-                while (nextSpeedLine != null) {
-                    timeStamps.add(Integer.parseInt(nextSpeedLine[0]));
-                    speeds.add(Float.parseFloat(nextSpeedLine[1]));
+                for(int i = 0; i < speedFileSize; i++) {
+                    timeStamps[i] = Integer.parseInt(nextSpeedLine[0]);
+                    speeds[i] = Float.parseFloat(nextSpeedLine[1]);
                     nextSpeedLine = speedReader.readLine().split("\t");
                 }
+                
+                speedReader.close();
 
             } catch (FileNotFoundException ex) {
                 Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
@@ -2699,18 +2702,40 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         }
 
     }
+    
+    public int getSpeedFileSize(File file){
+        int size = 0;
+        
+        try{
+            BufferedReader tempReader = new BufferedReader(new FileReader(file.toString()));
+            String nextLine = tempReader.readLine(); //skip header
+            
+            for(size = 0; !nextLine.isEmpty(); size++){
+                nextLine = tempReader.readLine();
+            }
+            
+            tempReader.close();
+            
+        } catch (FileNotFoundException ex) {
+            Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (IOException ex) {
+            Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        
+        return size;
+    }
 
     public int getSpeedSliceDuration() {
         if (speeds == null) {
             setSpeedInputFile();
         }
-        if (ts > timeStamps.get(speedArrayPointer)) {
+        if (ts > timeStamps[speedArrayPointer]) {
             speedArrayPointer++;
-            if (speedArrayPointer >= speeds.size()) {
+            if (speedArrayPointer >= speeds.length) {
                 speedArrayPointer = 0;
             }
         }
-        float speed = speeds.get(speedArrayPointer);
+        float speed = speeds[speedArrayPointer];
 
         int sd;
         if (speed != 0) {
