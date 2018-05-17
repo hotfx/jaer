@@ -1,3 +1,4 @@
+
 /*
  * To change this license header, choose License Headers in Project Properties.
  * To change this template file, choose Tools | Templates
@@ -183,10 +184,12 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
     private int MIN_SPEED_DIVIDEND = 100000;
     private int MAX_SPEED_DIVIDEND = Integer.MAX_VALUE;
     private boolean endOfSpeedFile;
-    private int speedArrayPointer;
+    private int speedArrayPointer, calculatedFileSliceDuration;
+    private float readFileSpeed;
     private BufferedReader speedReader;
     private int[] timeStamps;
     private float[] speeds;
+    private int SpeedInputTimeStamps = getInt("SpeedInputTimeStamps", 0);
 
     // nongreedy flow evaluation
     // the entire scene is subdivided into regions, and a bitmap of these regions distributed flow computation more fairly
@@ -391,7 +394,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                         sliceResult = minSADDistance(ein.x, ein.y, slices[sliceIndex(1)], slices[sliceIndex(2)], scale); // from ref slice to past slice k+1, using scale 0,1,....
 //                        sliceSummedSADValues[sliceIndex(scale + 2)] += sliceResult.sadValue; // accumulate SAD for this past slice
 //                        sliceSummedSADCounts[sliceIndex(scale + 2)]++; // accumulate SAD count for this past slice
-                        // sliceSummedSADValues should end up filling 2 values for 4 slices 
+                        // sliceSummedSADValues should end up filling 2 values for 4 slices
                         if ((result == null) || (sliceResult.sadValue < result.sadValue)) {
                             result = sliceResult; // result holds the overall min sad result
                             minDistScale = scale;
@@ -493,7 +496,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         // compute nearest power of two over block dimension
         int ss = (int) (Math.log(blockDimension - 1) / Math.log(2));
         setAreaEventNumberSubsampling(ss);
-        // set event count so that count=block area * sliceMaxValue/4; 
+        // set event count so that count=block area * sliceMaxValue/4;
         // i.e. set count to roll over when slice pixels from most subsampled scale are half full if they are half stimulated
         final int eventCount = (((blockDimension * blockDimension) * sliceMaxValue) / 2) >> (numScales - 1);
         setSliceEventCount(eventCount);
@@ -1239,7 +1242,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         // Also, we want the indexes to be centered in the histogram array so that searches at full scale appear at the middle
         // of the array and not at 0,0 corner.
         // Suppose searchDistance=1 and numScales=2. Then the histogram has size 2*2+1=5.
-        // Therefore the scale 0 results need to have offset added to them to center results in histogram that 
+        // Therefore the scale 0 results need to have offset added to them to center results in histogram that
         // shows results over all scales.
 
         result.scale = subSampleBy;
@@ -1251,7 +1254,7 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         result.dx = result.dx << subSampleBy;
         result.dy = result.dy << subSampleBy;
         // compute final index including subsampling and centering
-        // idxCentering is shift needed to be applyed to store this result finally into the hist, 
+        // idxCentering is shift needed to be applyed to store this result finally into the hist,
         final int idxCentering = (searchDistance << (numScales - 1)) - ((searchDistance) << subSampleBy); // i.e. for subSampleBy=0 and numScales=2, shift=1 so that full scale search is centered in 5x5 hist
         result.xidx = (result.xidx << subSampleBy) + idxCentering;
         result.yidx = (result.yidx << subSampleBy) + idxCentering;
@@ -1360,8 +1363,8 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         // debug
 //        if(dx==-1 && dy==-1) return 0; else return Float.MAX_VALUE;
 
-        // normalize by dimesion of subsampling, with idea that subsampling increases SAD 
-        //by sqrt(area) because of Gaussian distribution of SAD values 
+        // normalize by dimesion of subsampling, with idea that subsampling increases SAD
+        //by sqrt(area) because of Gaussian distribution of SAD values
         sumDist = sumDist >> (subsampleBy << 1);
         final int blockDim = (2 * r) + 1;
 
@@ -2678,17 +2681,17 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
                 speedReader = new BufferedReader(new FileReader(file.toString()));
                 speedReader.readLine(); //skip header
                 int speedFileSize = getSpeedFileSize(file);
-                
+
                 timeStamps = new int[speedFileSize];
                 speeds = new float[speedFileSize];
                 String[] nextSpeedLine;
 
-                for(int i = 0; i < speedFileSize-1; i++) {
+                for (int i = 0; i < speedFileSize - 1; i++) {
                     nextSpeedLine = speedReader.readLine().split("\t");
                     timeStamps[i] = Integer.parseInt(nextSpeedLine[0]);
                     speeds[i] = Float.parseFloat(nextSpeedLine[1]);
                 }
-                
+
                 speedReader.close();
 
             } catch (FileNotFoundException ex) {
@@ -2701,50 +2704,62 @@ public class PatchMatchFlow extends AbstractMotionFlow implements Observer, Fram
         }
 
     }
-    
-    public int getSpeedFileSize(File file){
+
+    public int getSpeedFileSize(File file) {
         int size = 0;
-        
-        try{
+
+        try {
             BufferedReader tempReader = new BufferedReader(new FileReader(file.toString()));
             String nextLine = tempReader.readLine(); //skip header
-            
-            for(size = 0; nextLine != null; size++){
+
+            for (size = 0; nextLine != null; size++) {
                 nextLine = tempReader.readLine();
             }
-            
+
             tempReader.close();
-            
+
         } catch (FileNotFoundException ex) {
             Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
         } catch (IOException ex) {
             Logger.getLogger(PatchMatchFlow.class.getName()).log(Level.SEVERE, null, ex);
         }
-        
+
         return size;
     }
 
     public int getSpeedSliceDuration() {
         if (speeds == null) {
             setSpeedInputFile();
+            calculatedFileSliceDuration = this.sliceDurationUs;
         }
         if (ts > timeStamps[speedArrayPointer]) {
             speedArrayPointer++;
             if (speedArrayPointer >= speeds.length) {
                 speedArrayPointer = 0;
             }
-        }
-        float speed = speeds[speedArrayPointer];
+            setSpeedInputTimeStamps(timeStamps[speedArrayPointer]);
+//        }
+            readFileSpeed = speeds[speedArrayPointer];
 
-        int sd;
-        if (speed != 0) {
-            sd = (int) (speedDividend / speed);
-        } else {
-            sd = this.sliceDurationUs;
+            if (readFileSpeed != 0) {
+                calculatedFileSliceDuration = (int) (speedDividend / readFileSpeed);
+            } else {
+                calculatedFileSliceDuration = this.sliceDurationUs;
+            }
+            setSliceDurationUs(calculatedFileSliceDuration);
         }
-        setSliceDurationUs(sd);
-
-        return sd;
+        return calculatedFileSliceDuration;
+//        return 1000;
     }
 
+    public void setSpeedInputTimeStamps(int output) {
+        int old = this.timeStamps[speedArrayPointer];
+
+        putInt("SpeedInputTimeStamps", output);
+        getSupport().firePropertyChange("SpeedInputTimeStamps", old, this.timeStamps[speedArrayPointer]);
+    }
+
+    public int getSpeedInputTimeStamps() {
+        return timeStamps[speedArrayPointer];
+    }
 }
